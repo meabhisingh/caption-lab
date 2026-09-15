@@ -47,6 +47,7 @@ Put the server values in `apps/server/.env`. The same file is used by local deve
 | `STORAGE_REGION`     | Yes      | Storage bucket region                                         |
 | `STORAGE_BUCKET`     | Yes      | Private bucket for uploads, transcripts, and renders          |
 | `WORKER_CONCURRENCY` | No       | Jobs processed in parallel; defaults to `2`, desktop uses `1` |
+| `REMOTION_GL`        | No       | Set to `angle` to accelerate Chromium frame rendering         |
 | `PORT`               | No       | API port; defaults to `4000`                                  |
 | `CORS_ORIGIN`        | No       | Allowed web origin; defaults to `http://localhost:3000`       |
 | `NODE_ENV`           | No       | Runtime mode; Compose sets this to `production`               |
@@ -101,7 +102,7 @@ pnpm desktop:dist
 
 Desktop artifacts are written to `apps/desktop/release`. Packaging is platform-specific because Electron, FFmpeg, Remotion, and Chrome include native binaries; build Windows installers on Windows and build macOS/Linux artifacts on their corresponding platforms.
 
-On first launch, open Settings and enter the seven required connections and credentials. CaptionLab encrypts them using Electron `safeStorage`, backed by the current operating-system account. The local UI and API bind only to `127.0.0.1`, the database schema is migrated automatically, and the desktop worker processes one job at a time.
+On first launch, open Settings and enter the seven required connections and credentials. CaptionLab encrypts them using Electron `safeStorage`, backed by the current operating-system account. Settings also includes an optional GPU frame acceleration switch, which enables Chromium ANGLE while keeping transparent VP9 encoding on the CPU. The local UI and API bind only to `127.0.0.1`, the database schema is migrated automatically, and the desktop worker processes one job at a time.
 
 ## Output
 

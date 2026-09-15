@@ -12,6 +12,7 @@ export const env = createEnv({
     STORAGE_REGION: z.string().min(1),
     STORAGE_BUCKET: z.string().min(1),
     WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(2),
+    REMOTION_GL: z.enum(["angle"]).optional(),
     REMOTION_ENTRY_POINT: z.string().min(1).optional(),
     REMOTION_BROWSER_EXECUTABLE: z.string().min(1).optional(),
     PORT: z.coerce.number().int().positive().default(4000),

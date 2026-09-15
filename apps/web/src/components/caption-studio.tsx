@@ -85,7 +85,9 @@ const DESKTOP_FIELDS = [
 ] as const;
 
 type DesktopFieldKey = (typeof DESKTOP_FIELDS)[number]["key"];
-type DesktopSettingsDraft = Partial<Record<DesktopFieldKey, string>>;
+type DesktopSettingsDraft = Partial<Record<DesktopFieldKey, string>> & {
+  GPU_FRAME_ACCELERATION?: boolean;
+};
 type DesktopServiceState = "needs-setup" | "starting" | "ready" | "error";
 
 interface DesktopSnapshot {
@@ -96,6 +98,7 @@ interface DesktopSnapshot {
   values: {
     STORAGE_REGION: string;
     STORAGE_BUCKET: string;
+    GPU_FRAME_ACCELERATION: boolean;
   };
 }
 const TEMPLATE_META: Array<{
@@ -697,6 +700,7 @@ function DesktopSettingsModal({
   const [draft, setDraft] = useState<DesktopSettingsDraft>({
     STORAGE_REGION: snapshot.values.STORAGE_REGION,
     STORAGE_BUCKET: snapshot.values.STORAGE_BUCKET,
+    GPU_FRAME_ACCELERATION: snapshot.values.GPU_FRAME_ACCELERATION,
   });
   const [saving, setSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -797,6 +801,45 @@ function DesktopSettingsModal({
         <div className="mx-6 rounded-xl border border-amber-300/15 bg-amber-300/5 p-3 text-xs leading-5 text-amber-100/70">
           PostgreSQL, Redis, S3-compatible storage, and Groq still need network
           access. The UI, API, worker, FFmpeg, and video renderer run locally.
+        </div>
+
+        <div className="mx-6 mt-4 flex items-center justify-between gap-5 rounded-xl border border-white/10 bg-black/20 p-4">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-medium text-zinc-200">
+              <Gauge size={16} className="text-lime-300" />
+              GPU frame acceleration
+            </div>
+            <p className="mt-1 max-w-md text-xs leading-5 text-zinc-500">
+              Uses Chromium ANGLE for transforms, shadows, and compositing. VP9
+              transparency encoding still uses the CPU. Disable this if a GPU
+              driver or virtual machine causes rendering errors.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={Boolean(draft.GPU_FRAME_ACCELERATION)}
+            onClick={() =>
+              setDraft((current) => ({
+                ...current,
+                GPU_FRAME_ACCELERATION: !current.GPU_FRAME_ACCELERATION,
+              }))
+            }
+            className={`relative h-7 w-12 shrink-0 rounded-full border transition ${
+              draft.GPU_FRAME_ACCELERATION
+                ? "border-lime-300/60 bg-lime-300"
+                : "border-white/15 bg-zinc-800"
+            }`}
+          >
+            <span
+              className={`absolute top-1 size-[18px] rounded-full bg-black shadow transition-transform ${
+                draft.GPU_FRAME_ACCELERATION
+                  ? "translate-x-[25px]"
+                  : "translate-x-1"
+              }`}
+            />
+            <span className="sr-only">Toggle GPU frame acceleration</span>
+          </button>
         </div>
 
         {settingsError || snapshot.error ? (

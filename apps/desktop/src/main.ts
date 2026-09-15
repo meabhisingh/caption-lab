@@ -32,7 +32,9 @@ const REQUIRED_KEYS = [
 ] as const;
 
 type SettingsKey = (typeof REQUIRED_KEYS)[number];
-type StoredSettings = Record<SettingsKey, string>;
+type StoredSettings = Record<SettingsKey, string> & {
+  GPU_FRAME_ACCELERATION: boolean;
+};
 type ServiceState = "needs-setup" | "starting" | "ready" | "error";
 
 interface SettingsInput {
@@ -43,6 +45,7 @@ interface SettingsInput {
   AWS_SECRET_KEY?: string;
   STORAGE_REGION?: string;
   STORAGE_BUCKET?: string;
+  GPU_FRAME_ACCELERATION?: boolean;
 }
 
 interface ServiceSnapshot {
@@ -50,7 +53,10 @@ interface ServiceSnapshot {
   state: ServiceState;
   error: string | null;
   savedFields: Record<SettingsKey, boolean>;
-  values: Pick<StoredSettings, "STORAGE_REGION" | "STORAGE_BUCKET">;
+  values: Pick<
+    StoredSettings,
+    "STORAGE_REGION" | "STORAGE_BUCKET" | "GPU_FRAME_ACCELERATION"
+  >;
 }
 
 interface RuntimeManifest {
@@ -125,7 +131,10 @@ const readSettings = async (): Promise<StoredSettings | null> => {
     if (!REQUIRED_KEYS.every((key) => Boolean(parsed[key]?.trim()))) {
       return null;
     }
-    const settings = parsed as StoredSettings;
+    const settings = {
+      ...parsed,
+      GPU_FRAME_ACCELERATION: parsed.GPU_FRAME_ACCELERATION === true,
+    } as StoredSettings;
     if (decrypted.shouldReEncrypt) await writeSettings(settings);
     return settings;
   } catch (error) {
@@ -163,13 +172,20 @@ const mergeAndValidateSettings = (
     throw new Error("Invalid settings payload.");
   }
   const values = input as SettingsInput;
-  const merged = Object.fromEntries(
+  const credentials = Object.fromEntries(
     REQUIRED_KEYS.map((key) => [
       key,
       values[key]?.trim() || current?.[key] || "",
     ]),
-  ) as StoredSettings;
-  const missing = REQUIRED_KEYS.filter((key) => !merged[key]);
+  ) as Record<SettingsKey, string>;
+  const merged: StoredSettings = {
+    ...credentials,
+    GPU_FRAME_ACCELERATION:
+      typeof values.GPU_FRAME_ACCELERATION === "boolean"
+        ? values.GPU_FRAME_ACCELERATION
+        : (current?.GPU_FRAME_ACCELERATION ?? false),
+  };
+  const missing = REQUIRED_KEYS.filter((key) => !credentials[key]);
   if (missing.length) {
     throw new Error(`Complete the required fields: ${missing.join(", ")}.`);
   }
@@ -192,6 +208,7 @@ const publicSnapshot = async (): Promise<ServiceSnapshot> => {
     values: {
       STORAGE_REGION: settings?.STORAGE_REGION ?? "ap-southeast-1",
       STORAGE_BUCKET: settings?.STORAGE_BUCKET ?? "",
+      GPU_FRAME_ACCELERATION: settings?.GPU_FRAME_ACCELERATION ?? false,
     },
   };
 };
@@ -291,12 +308,14 @@ const stopBackend = async () => {
 };
 
 const backendEnvironment = async (settings: StoredSettings) => {
+  const { GPU_FRAME_ACCELERATION, ...serviceSettings } = settings;
   const environment: NodeJS.ProcessEnv = {
-    ...settings,
+    ...serviceSettings,
     PORT: String(API_PORT),
     CORS_ORIGIN: WEB_ORIGIN,
     NODE_ENV: app.isPackaged ? "production" : "development",
     WORKER_CONCURRENCY: "1",
+    ...(GPU_FRAME_ACCELERATION ? { REMOTION_GL: "angle" } : {}),
   };
   if (app.isPackaged) {
     const backendDirectory = join(process.resourcesPath, "backend");

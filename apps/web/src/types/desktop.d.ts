@@ -15,13 +15,20 @@ interface CaptionDesktopSnapshot {
   values: {
     STORAGE_REGION: string;
     STORAGE_BUCKET: string;
+    GPU_FRAME_ACCELERATION: boolean;
   };
 }
+
+type CaptionDesktopSettingsInput = Partial<
+  Record<CaptionDesktopFieldKey, string>
+> & {
+  GPU_FRAME_ACCELERATION?: boolean;
+};
 
 interface CaptionDesktopBridge {
   getSettings(): Promise<CaptionDesktopSnapshot>;
   saveSettings(
-    settings: Partial<Record<CaptionDesktopFieldKey, string>>,
+    settings: CaptionDesktopSettingsInput,
   ): Promise<CaptionDesktopSnapshot>;
   download(url: string, suggestedName?: string): Promise<boolean>;
   onStatus(callback: (status: CaptionDesktopSnapshot) => void): () => void;

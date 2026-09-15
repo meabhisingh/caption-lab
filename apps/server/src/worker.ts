@@ -193,6 +193,7 @@ const exportProject = async (projectId: string) => {
       logLevel: "warn",
       chromiumOptions: {
         enableMultiProcessOnLinux: true,
+        ...(env.REMOTION_GL ? { gl: env.REMOTION_GL } : {}),
       },
       browserExecutable: env.REMOTION_BROWSER_EXECUTABLE,
       onProgress: ({ progress }) => {
