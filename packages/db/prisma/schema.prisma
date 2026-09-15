@@ -1,0 +1,123 @@
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id               String      @id @default(uuid())
+  name             String
+  email            String      @unique
+  emailVerified    Boolean     @default(false)
+  image            String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  twoFactorEnabled Boolean?    @default(false)
+  username         String?     @unique @default(cuid())
+  displayUsername  String?
+  role             String?
+  banned           Boolean?    @default(false)
+  banReason        String?
+  banExpires       DateTime?
+  accounts         Account[]
+  twofactors       TwoFactor[]
+  captionProjects  CaptionProject[]
+
+  @@map("user")
+}
+
+enum CaptionProjectStatus {
+  UPLOADED
+  PROCESSING
+  READY
+  EXPORTING
+  COMPLETE
+  FAILED
+}
+
+enum CaptionMediaType {
+  AUDIO
+  VIDEO
+}
+
+model CaptionProject {
+  id              String               @id @default(cuid())
+  userId          String?
+  user            User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+  fileName        String
+  contentType     String
+  mediaType       CaptionMediaType
+  status          CaptionProjectStatus @default(UPLOADED)
+  sourceKey       String
+  audioKey        String?
+  transcriptKey   String?
+  transcript      Json?
+  captionStyle    Json
+  durationSeconds Float?
+  width           Int                  @default(1080)
+  height          Int                  @default(1920)
+  fps             Int                  @default(30)
+  renderProgress  Int                  @default(0)
+  exportKey       String?
+  error           String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@map("caption_project")
+}
+
+model Account {
+  id                    String    @id @default(uuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  issuer String
+
+  @@index([userId])
+  @@map("account")
+  @@unique([issuer, accountId], map: "account_issuer_accountId_uidx")
+}
+
+model Verification {
+  id         String   @id @default(uuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model TwoFactor {
+  id                      String    @id @default(uuid())
+  secret                  String
+  backupCodes             String
+  userId                  String
+  user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  verified                Boolean?  @default(true)
+  failedVerificationCount Int?      @default(0)
+  lockedUntil             DateTime?
+
+  @@index([secret])
+  @@index([userId])
+  @@map("twoFactor")
+}

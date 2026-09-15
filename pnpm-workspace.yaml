@@ -1,3 +1,13 @@
 packages:
   - "apps/*"
   - "packages/*"
+allowBuilds:
+  "@prisma/engines": true
+  electron: true
+  electron-winstaller: true
+  esbuild: true
+  ffmpeg-static: true
+  msgpackr-extract: true
+  prisma: true
+minimumReleaseAgeExclude:
+  - elysia-sentry-errors@0.1.0

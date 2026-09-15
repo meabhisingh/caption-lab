@@ -1,0 +1,6 @@
+{
+	"extends": "@caption-generator/config/tsconfig.base.json",
+	"include": [
+		"src"
+	]
+}

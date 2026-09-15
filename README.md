@@ -1,159 +1,110 @@
-# Turborepo starter
+# CaptionLab
 
-This Turborepo starter is maintained by the Turborepo core team.
+CaptionLab turns uploaded audio or video into a transparent, word-synced caption overlay.
 
-## Using this example
+## Pipeline
 
-Run the following command:
+1. The Next.js editor uploads an audio or video file to the Hono API.
+2. The source is stored privately in S3 and a BullMQ job is queued in Redis.
+3. The worker uses FFmpeg to extract/normalize mono audio.
+4. Groq Whisper returns `verbose_json` with word timestamps.
+5. Postgres stores the transcript and selected caption style.
+6. The shared Remotion composition powers the browser preview and renders a silent VP9 WebM with alpha.
 
-```sh
-npx create-turbo@latest
+## Workspace
+
+- `apps/web` — Next.js 16 editor and Remotion Player preview
+- `apps/server` — Hono API, BullMQ worker, S3 I/O, FFmpeg, Groq, and Remotion rendering
+- `packages/captions` — shared word-highlight composition and five style presets
+- `packages/db` — Prisma client, schema, and migrations
+- `packages/queue` — typed BullMQ queue
+- `packages/types` — shared API, project, word, and style contracts
+
+## Local setup
+
+Copy `.env.example` to `apps/server/.env`, and copy `apps/web/.env.example` to `apps/web/.env.local`.
+
+```bash
+pnpm install
+pnpm --filter @caption-generator/db exec prisma generate --config prisma7.config.ts
+pnpm --filter @caption-generator/db exec prisma migrate deploy --config prisma7.config.ts
+pnpm dev
 ```
 
-## What's inside?
+The editor runs at `http://localhost:3000`; the API and worker run at `http://localhost:4000`.
 
-This Turborepo includes the following packages/apps:
+## Environment variables
 
-### Apps and Packages
+Put the server values in `apps/server/.env`. The same file is used by local development and Docker Compose.
 
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `@next/eslint-plugin-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
+| Variable             | Required | Purpose                                                       |
+| -------------------- | -------- | ------------------------------------------------------------- |
+| `DATABASE_URL`       | Yes      | PostgreSQL connection string used by Prisma                   |
+| `GROQ_API_KEY`       | Yes      | Groq API key for Whisper speech-to-text                       |
+| `REDIS_URL`          | Yes      | Redis connection string used by BullMQ                        |
+| `AWS_ACCESS_KEY`     | Yes      | S3-compatible storage access key                              |
+| `AWS_SECRET_KEY`     | Yes      | S3-compatible storage secret key                              |
+| `STORAGE_REGION`     | Yes      | Storage bucket region                                         |
+| `STORAGE_BUCKET`     | Yes      | Private bucket for uploads, transcripts, and renders          |
+| `WORKER_CONCURRENCY` | No       | Jobs processed in parallel; defaults to `2`, desktop uses `1` |
+| `PORT`               | No       | API port; defaults to `4000`                                  |
+| `CORS_ORIGIN`        | No       | Allowed web origin; defaults to `http://localhost:3000`       |
+| `NODE_ENV`           | No       | Runtime mode; Compose sets this to `production`               |
 
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
+The web app has one build-time variable: `NEXT_PUBLIC_SERVER_URL`. It defaults to `http://localhost:4000` in Compose. Set it to the browser-accessible API URL when deploying to another host. Never put server credentials in a `NEXT_PUBLIC_*` variable.
 
-### Utilities
+## Docker Compose
 
-This Turborepo has some additional tools already setup for you:
+Create the server environment file once:
 
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo build
+```powershell
+Copy-Item .env.example apps/server/.env
 ```
 
-Without global `turbo`, use your package manager:
+Fill in the seven required values, then build and start the complete app:
 
-```sh
-cd my-turborepo
-npx turbo build
-pnpm exec turbo build
-pnpm exec turbo build
+```bash
+docker compose up --build
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+Compose starts the web app on `http://localhost:3000` and the API/worker on `http://localhost:4000`. The server waits for its health check, applies pending Prisma migrations, and then starts the API and render worker. PostgreSQL, Redis, Groq, and S3 remain managed external services and are not duplicated as local containers.
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+For a non-local deployment, create a root `.env` containing the public URLs before building:
 
-```sh
-turbo build --filter=docs
+```dotenv
+NEXT_PUBLIC_SERVER_URL=https://api.example.com
 ```
 
-Without global `turbo`:
+Also set `CORS_ORIGIN=https://captions.example.com` in `apps/server/.env`.
 
-```sh
-npx turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
+## Desktop application
+
+The Electron app packages the Next.js UI, Hono API, BullMQ worker, FFmpeg, Prisma, Remotion, and Chrome Headless Shell into one desktop installation. PostgreSQL, Redis, S3-compatible storage, and Groq remain managed services and require network access.
+
+Run the desktop app from source:
+
+```bash
+pnpm desktop:dev
 ```
 
-### Develop
+Build an unpacked application for testing:
 
-To develop all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo dev
+```bash
+pnpm desktop:pack
 ```
 
-Without global `turbo`, use your package manager:
+Build the Windows installer:
 
-```sh
-cd my-turborepo
-npx turbo dev
-pnpm exec turbo dev
-pnpm exec turbo dev
+```bash
+pnpm desktop:dist
 ```
 
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+Desktop artifacts are written to `apps/desktop/release`. Packaging is platform-specific because Electron, FFmpeg, Remotion, and Chrome include native binaries; build Windows installers on Windows and build macOS/Linux artifacts on their corresponding platforms.
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+On first launch, open Settings and enter the seven required connections and credentials. CaptionLab encrypts them using Electron `safeStorage`, backed by the current operating-system account. The local UI and API bind only to `127.0.0.1`, the database schema is migrated automatically, and the desktop worker processes one job at a time.
 
-```sh
-turbo dev --filter=web
-```
+## Output
 
-Without global `turbo`:
+Exports are 1080×1920 VP9 WebM files with `alpha_mode: 1` and no audio stream. The source, normalized audio, `verbose.json`, and final overlay remain private S3 objects; API responses use one-hour signed URLs.
 
-```sh
-npx turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-pnpm exec turbo login
-pnpm exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-pnpm exec turbo link
-pnpm exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+Remotion may require a company license depending on the organization using the app. Review the current licensing terms before deploying commercially.

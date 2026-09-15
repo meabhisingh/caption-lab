@@ -1,0 +1,21 @@
+{
+  "name": "@caption-generator/db",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "generate:auth": " pnpm dlx auth@latest generate --output ../../packages/db/prisma/schema.prisma"
+  },
+  "devDependencies": {
+    "@caption-generator/config": "workspace:*",
+    "@types/pg": "^8.23.1"
+  },
+  "dependencies": {
+    "@caption-generator/env": "workspace:*",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "7.10.0",
+    "pg": "^8.23.0",
+    "prisma": "^7.10.0"
+  }
+}

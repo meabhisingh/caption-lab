@@ -1,0 +1,21 @@
+{
+	"name": "@caption-generator/queue",
+	"module": "index.ts",
+	"type": "module",
+	"exports": {
+		".": {
+			"default": "./src/index.ts"
+		}
+	},
+	"devDependencies": {
+		"@caption-generator/types": "workspace:*",
+		"@caption-generator/config": "workspace:*",
+		"@types/node": "^20"
+	},
+	"peerDependencies": {
+		"typescript": "^5.9.3"
+	},
+	"dependencies": {
+		"bullmq": "^5.78.1"
+	}
+}

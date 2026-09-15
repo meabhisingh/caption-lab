@@ -1,0 +1,55 @@
+{
+  "name": "desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CaptionLab desktop application",
+  "author": "CaptionLab",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node scripts/build-main.mjs",
+    "check-types": "tsc --noEmit",
+    "dev": "pnpm run build && electron .",
+    "stage": "node scripts/stage.mjs",
+    "package": "pnpm run build && pnpm run stage && node node_modules/electron-builder/cli.js --dir",
+    "dist": "pnpm run build && pnpm run stage && node node_modules/electron-builder/cli.js --win nsis"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "electron": "44.2.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "typescript": "^5.9.3"
+  },
+  "build": {
+    "appId": "com.captionlab.desktop",
+    "productName": "CaptionLab",
+    "asar": true,
+    "compression": "normal",
+    "npmRebuild": false,
+    "afterPack": "scripts/after-pack.cjs",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

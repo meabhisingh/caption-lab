@@ -1,0 +1,36 @@
+{
+  "name": "server",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc --noEmit",
+    "check-types": "tsc --noEmit",
+    "start": "tsx src/index.ts",
+    "start:container": "pnpm --filter @caption-generator/db exec prisma migrate deploy --config prisma7.config.ts && pnpm start"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1127.0",
+    "@aws-sdk/s3-request-presigner": "3.1127.0",
+    "@caption-generator/ai": "workspace:*",
+    "@caption-generator/captions": "workspace:*",
+    "@caption-generator/db": "workspace:*",
+    "@caption-generator/env": "workspace:*",
+    "@caption-generator/queue": "workspace:*",
+    "@caption-generator/types": "workspace:*",
+    "@hono/node-server": "^2.1.1",
+    "@remotion/bundler": "4.0.521",
+    "@remotion/cli": "4.0.521",
+    "@remotion/renderer": "4.0.521",
+    "bullmq": "^5.78.1",
+    "ffmpeg-static": "^5.3.0",
+    "hono": "^4.13.7",
+    "remotion": "4.0.521",
+    "tsx": "^4.23.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/ffmpeg-static": "^3.0.3",
+    "typescript": "^5.9.3"
+  }
+}

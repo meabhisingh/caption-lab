@@ -1,0 +1,23 @@
+{
+  "name": "@caption-generator/captions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./remotion-entry": "./src/remotion-entry.tsx"
+  },
+  "scripts": { "check-types": "tsc --noEmit" },
+  "dependencies": {
+    "@caption-generator/types": "workspace:*",
+    "@remotion/media": "4.0.521",
+    "react": "19.2.8",
+    "remotion": "4.0.521"
+  },
+  "devDependencies": {
+    "@caption-generator/config": "workspace:*",
+    "@types/react": "^19.2.18",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": { "react": "^19.2.0" }
+}

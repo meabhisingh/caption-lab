@@ -1,0 +1,5 @@
+{
+  "extends": "@caption-generator/config/tsconfig.base.json",
+  "compilerOptions": { "jsx": "react-jsx", "noUnusedLocals": false },
+  "include": ["src"]
+}

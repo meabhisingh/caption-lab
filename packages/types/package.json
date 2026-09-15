@@ -1,0 +1,12 @@
+{
+  "name": "@caption-generator/types",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": { "check-types": "tsc --noEmit" },
+  "devDependencies": {
+    "@caption-generator/config": "workspace:*",
+    "typescript": "^5.9.3"
+  }
+}

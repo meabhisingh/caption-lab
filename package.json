@@ -3,13 +3,17 @@
   "private": true,
   "scripts": {
     "build": "turbo run build",
+    "desktop:dev": "pnpm --filter desktop run dev",
+    "desktop:pack": "pnpm --filter desktop run package",
+    "desktop:dist": "pnpm --filter desktop run dist",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "check-types": "turbo run check-types"
   },
   "devDependencies": {
-    "prettier": "3.9.6",
+    "@types/node": "^24.10.0",
+    "prettier": "^3.9.6",
     "turbo": "^2.10.12",
     "typescript": "7.0.2"
   },
