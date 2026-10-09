@@ -1,0 +1,9 @@
+{
+  "identifier": "default",
+  "description": "CaptionLab local window",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:43110", "http://127.0.0.1:43110/*"]
+  },
+  "permissions": ["core:default", "dialog:default"]
+}

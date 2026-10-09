@@ -1,0 +1,23 @@
+[package]
+name = "captionlab"
+version = "0.2.0"
+description = "CaptionLab desktop application"
+authors = ["CaptionLab"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "captionlab_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+keyring = "3"
+reqwest = { version = "0.12", default-features = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tokio = { version = "1", features = ["time"] }

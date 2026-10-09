@@ -21,6 +21,14 @@ coverage/
 *.tsbuildinfo
 next-env.d.ts
 
+# Desktop shell
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/resources/web/**
+!apps/desktop/src-tauri/resources/web/.gitkeep
+apps/desktop/src-tauri/resources/backend/**
+!apps/desktop/src-tauri/resources/backend/.gitkeep
+
 # Platform and tooling
 .vercel/
 .DS_Store

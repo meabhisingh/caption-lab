@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 
 const desktopDirectory = resolve(import.meta.dirname, "..");
 const repositoryRoot = resolve(desktopDirectory, "../..");
-const stageDirectory = resolve(desktopDirectory, "stage");
+const stageDirectory = resolve(desktopDirectory, "src-tauri/resources");
 const webStage = resolve(stageDirectory, "web");
 const backendStage = resolve(stageDirectory, "backend");
 const pnpmCli = process.env.npm_execpath;

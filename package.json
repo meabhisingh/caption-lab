@@ -4,7 +4,7 @@
   "scripts": {
     "build": "turbo run build",
     "desktop:dev": "pnpm --filter desktop run dev",
-    "desktop:pack": "pnpm --filter desktop run package",
+    "desktop:pack": "pnpm --filter desktop run pack",
     "desktop:dist": "pnpm --filter desktop run dist",
     "dev": "turbo run dev",
     "lint": "turbo run lint",

@@ -36,71 +36,16 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  loadDesktopBridge,
+  type DesktopBridge,
+  type DesktopServiceState,
+  type DesktopSettingsDraft,
+  type DesktopSnapshot,
+} from "@/lib/desktop";
 
 const SERVER_URL =
   process.env.NEXT_PUBLIC_SERVER_URL ?? "http://localhost:4000";
-const DESKTOP_FIELDS = [
-  {
-    key: "DATABASE_URL",
-    label: "PostgreSQL URL",
-    placeholder: "postgresql://user:password@host:5432/postgres",
-    secret: true,
-  },
-  {
-    key: "GROQ_API_KEY",
-    label: "Groq API key",
-    placeholder: "gsk_...",
-    secret: true,
-  },
-  {
-    key: "REDIS_URL",
-    label: "Redis URL",
-    placeholder: "rediss://default:password@host:6379",
-    secret: true,
-  },
-  {
-    key: "AWS_ACCESS_KEY",
-    label: "Storage access key",
-    placeholder: "Access key",
-    secret: true,
-  },
-  {
-    key: "AWS_SECRET_KEY",
-    label: "Storage secret key",
-    placeholder: "Secret key",
-    secret: true,
-  },
-  {
-    key: "STORAGE_REGION",
-    label: "Storage region",
-    placeholder: "ap-southeast-1",
-    secret: false,
-  },
-  {
-    key: "STORAGE_BUCKET",
-    label: "Storage bucket",
-    placeholder: "captionlab-files",
-    secret: false,
-  },
-] as const;
-
-type DesktopFieldKey = (typeof DESKTOP_FIELDS)[number]["key"];
-type DesktopSettingsDraft = Partial<Record<DesktopFieldKey, string>> & {
-  GPU_FRAME_ACCELERATION?: boolean;
-};
-type DesktopServiceState = "needs-setup" | "starting" | "ready" | "error";
-
-interface DesktopSnapshot {
-  configured: boolean;
-  state: DesktopServiceState;
-  error: string | null;
-  savedFields: Record<DesktopFieldKey, boolean>;
-  values: {
-    STORAGE_REGION: string;
-    STORAGE_BUCKET: string;
-    GPU_FRAME_ACCELERATION: boolean;
-  };
-}
 const TEMPLATE_META: Array<{
   id: CaptionTemplateId;
   name: string;
@@ -138,6 +83,7 @@ export function CaptionStudio() {
     null,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const desktopRef = useRef<DesktopBridge | null>(null);
 
   const projectId = project?.id;
   const projectStatus = project?.status;
@@ -175,12 +121,16 @@ export function CaptionStudio() {
   }, [projectId, shouldPoll]);
 
   useEffect(() => {
-    const desktop = window.captionDesktop;
-    if (!desktop) return;
     let cancelled = false;
-    void desktop
-      .getSettings()
-      .then((snapshot) => {
+    let unsubscribe = () => {};
+    void loadDesktopBridge()
+      .then(async (desktop) => {
+        if (!desktop || cancelled) return;
+        desktopRef.current = desktop;
+        unsubscribe = desktop.onStatus((snapshot) => {
+          if (!cancelled) setDesktopStatus(snapshot);
+        });
+        const snapshot = await desktop.getSettings();
         if (cancelled) return;
         setDesktopStatus(snapshot);
         if (!snapshot.configured) setSettingsOpen(true);
@@ -193,9 +143,6 @@ export function CaptionStudio() {
               : "Could not load desktop settings",
           );
       });
-    const unsubscribe = desktop.onStatus((snapshot) => {
-      if (!cancelled) setDesktopStatus(snapshot);
-    });
     return () => {
       cancelled = true;
       unsubscribe();
@@ -287,7 +234,7 @@ export function CaptionStudio() {
   const downloadOverlay = async () => {
     if (!project?.exportUrl) return;
     try {
-      await window.captionDesktop?.download(
+      await desktopRef.current?.download(
         project.exportUrl,
         `${project.fileName.replace(/\.[^.]+$/, "") || "captions"}-captions.webm`,
       );
@@ -396,6 +343,11 @@ export function CaptionStudio() {
           <DesktopSettingsModal
             snapshot={desktopStatus}
             onClose={() => setSettingsOpen(false)}
+            onSave={(draft) => {
+              const desktop = desktopRef.current;
+              if (!desktop) throw new Error("Desktop bridge is unavailable.");
+              return desktop.saveSettings(draft);
+            }}
             onSaved={(snapshot) => {
               setDesktopStatus(snapshot);
               setSettingsOpen(false);
@@ -578,6 +530,11 @@ export function CaptionStudio() {
         <DesktopSettingsModal
           snapshot={desktopStatus}
           onClose={() => setSettingsOpen(false)}
+          onSave={(draft) => {
+            const desktop = desktopRef.current;
+            if (!desktop) throw new Error("Desktop bridge is unavailable.");
+            return desktop.saveSettings(draft);
+          }}
           onSaved={(snapshot) => {
             setDesktopStatus(snapshot);
             setSettingsOpen(false);
@@ -691,27 +648,27 @@ function Header({
 function DesktopSettingsModal({
   snapshot,
   onClose,
+  onSave,
   onSaved,
 }: {
   snapshot: DesktopSnapshot;
   onClose: () => void;
+  onSave: (draft: DesktopSettingsDraft) => Promise<DesktopSnapshot>;
   onSaved: (snapshot: DesktopSnapshot) => void;
 }) {
   const [draft, setDraft] = useState<DesktopSettingsDraft>({
-    STORAGE_REGION: snapshot.values.STORAGE_REGION,
-    STORAGE_BUCKET: snapshot.values.STORAGE_BUCKET,
     GPU_FRAME_ACCELERATION: snapshot.values.GPU_FRAME_ACCELERATION,
   });
   const [saving, setSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  const groqSaved = snapshot.savedFields.GROQ_API_KEY;
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!window.captionDesktop) return;
     setSaving(true);
     setSettingsError(null);
     try {
-      onSaved(await window.captionDesktop.saveSettings(draft));
+      onSaved(await onSave(draft));
     } catch (saveError) {
       setSettingsError(
         saveError instanceof Error
@@ -737,10 +694,11 @@ function DesktopSettingsModal({
                 Desktop runtime
               </span>
             </div>
-            <h2 className="mt-2 text-xl font-semibold">Connections & keys</h2>
+            <h2 className="mt-2 text-xl font-semibold">Local studio</h2>
             <p className="mt-1 max-w-lg text-xs leading-5 text-zinc-500">
-              Credentials are encrypted with your operating system account and
-              never exposed through a public server.
+              Projects, media, and the job queue stay on this computer. The Groq
+              key is stored in the operating system credential manager and is
+              only used for speech-to-text.
             </p>
           </div>
           {snapshot.configured ? (
@@ -755,52 +713,41 @@ function DesktopSettingsModal({
           ) : null}
         </div>
 
-        <div className="grid gap-4 p-6 sm:grid-cols-2">
-          {DESKTOP_FIELDS.map((field) => {
-            const saved = snapshot.savedFields[field.key];
-            return (
-              <label
-                key={field.key}
-                className={
-                  field.key === "DATABASE_URL" || field.key === "REDIS_URL"
-                    ? "sm:col-span-2"
-                    : ""
-                }
-              >
-                <span className="mb-2 flex items-center justify-between text-xs font-medium text-zinc-300">
-                  {field.label}
-                  {saved ? (
-                    <span className="flex items-center gap-1 text-[10px] font-normal text-lime-300/70">
-                      <Check size={10} /> Saved
-                    </span>
-                  ) : null}
+        <div className="grid gap-4 p-6">
+          <label>
+            <span className="mb-2 flex items-center justify-between text-xs font-medium text-zinc-300">
+              Groq API key
+              {groqSaved ? (
+                <span className="flex items-center gap-1 text-[10px] font-normal text-lime-300/70">
+                  <Check size={10} /> Saved
                 </span>
-                <input
-                  type={field.secret ? "password" : "text"}
-                  autoComplete="off"
-                  value={draft[field.key] ?? ""}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      [field.key]: event.target.value,
-                    }))
-                  }
-                  placeholder={
-                    saved && field.secret
-                      ? "Leave blank to keep saved value"
-                      : field.placeholder
-                  }
-                  required={!saved}
-                  className="h-11 w-full rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-700 focus:border-lime-300/50 focus:ring-2 focus:ring-lime-300/10"
-                />
-              </label>
-            );
-          })}
+              ) : null}
+            </span>
+            <input
+              type="password"
+              autoComplete="off"
+              value={draft.GROQ_API_KEY ?? ""}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  GROQ_API_KEY: event.target.value,
+                }))
+              }
+              placeholder={
+                groqSaved ? "Leave blank to keep saved value" : "gsk_..."
+              }
+              required={!groqSaved}
+              className="h-11 w-full rounded-xl border border-white/10 bg-black/25 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-700 focus:border-lime-300/50 focus:ring-2 focus:ring-lime-300/10"
+            />
+          </label>
         </div>
 
-        <div className="mx-6 rounded-xl border border-amber-300/15 bg-amber-300/5 p-3 text-xs leading-5 text-amber-100/70">
-          PostgreSQL, Redis, S3-compatible storage, and Groq still need network
-          access. The UI, API, worker, FFmpeg, and video renderer run locally.
+        <div className="mx-6 rounded-xl border border-lime-300/15 bg-lime-300/5 p-3 text-xs leading-5 text-zinc-300">
+          SQLite, uploaded media, transcripts, and rendered overlays are stored
+          on this computer.
+          <span className="mt-2 block break-all font-mono text-[10px] text-zinc-500">
+            {snapshot.values.dataDir}
+          </span>
         </div>
 
         <div className="mx-6 mt-4 flex items-center justify-between gap-5 rounded-xl border border-white/10 bg-black/20 p-4">
@@ -863,7 +810,7 @@ function DesktopSettingsModal({
             ) : (
               <ShieldCheck size={15} />
             )}
-            {saving ? "Testing connections…" : "Save and start"}
+            {saving ? "Starting local studio…" : "Save and start"}
           </button>
         </div>
       </form>

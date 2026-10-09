@@ -3,8 +3,8 @@ packages:
   - "packages/*"
 allowBuilds:
   "@prisma/engines": true
-  electron: true
-  electron-winstaller: true
+  electron: set this to true or false
+  electron-winstaller: set this to true or false
   esbuild: true
   ffmpeg-static: true
   msgpackr-extract: true

@@ -11,6 +11,7 @@
   "dependencies": {
     "@caption-generator/captions": "workspace:*",
     "@caption-generator/types": "workspace:*",
+    "@tauri-apps/api": "^2",
     "@remotion/player": "4.0.521",
     "lucide-react": "^0.544.0",
     "next": "16.3.4",
