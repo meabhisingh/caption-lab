@@ -393,6 +393,7 @@ dependencies = [
 name = "captionlab"
 version = "0.2.0"
 dependencies = [
+ "dunce",
  "keyring",
  "reqwest 0.12.28",
  "serde",

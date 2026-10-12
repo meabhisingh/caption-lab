@@ -36,6 +36,10 @@ pub fn repo_root() -> PathBuf {
 }
 
 pub fn bundled_root(resource_dir: &Path) -> Option<PathBuf> {
+    // On Windows Tauri hands out verbatim paths (\\?\C:\...). Every path the
+    // Node processes get is derived from this one, and webpack reads the "?"
+    // in such a path as the start of a query, which broke every export.
+    let resource_dir = dunce::simplified(resource_dir);
     if resource_dir.join("web/server.js").is_file() {
         return Some(resource_dir.to_path_buf());
     }

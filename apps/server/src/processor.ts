@@ -5,15 +5,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { AI } from "@caption-generator/ai";
+import { normalizeCaptionStyle } from "@caption-generator/captions";
 import { env } from "@caption-generator/env/server";
-import type {
-  CaptionJob,
-  CaptionStyle,
-  CaptionWord,
-} from "@caption-generator/types";
+import type { CaptionJob, CaptionWord } from "@caption-generator/types";
 import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
 import ffmpegPath from "ffmpeg-static";
+import { transcriptWords } from "./project";
 import type { ProjectStore } from "./project-store";
 import { getObjectBuffer, putObject } from "./storage";
 
@@ -21,16 +19,39 @@ const execFileAsync = promisify(execFile);
 const ai = new AI();
 let bundlePromise: Promise<string> | null = null;
 
+// A Windows verbatim path (\\?\C:\...) as plain C:\..., because webpack reads
+// the "?" in it as the start of a query and then finds no file to open.
+const plainPath = (path: string) =>
+  path.replace(/^\\\\\?\\UNC\\/, "\\\\").replace(/^\\\\\?\\/, "");
+
 const getBundle = () => {
   if (!bundlePromise) {
     const serverDirectory = dirname(fileURLToPath(import.meta.url));
-    const entryPoint =
-      env.REMOTION_ENTRY_POINT ??
-      join(
-        serverDirectory,
-        "../../../packages/captions/src/remotion-entry.tsx",
-      );
-    bundlePromise = bundle({ entryPoint, enableCaching: true });
+    const entryPoint = env.REMOTION_ENTRY_POINT
+      ? plainPath(env.REMOTION_ENTRY_POINT)
+      : join(
+          serverDirectory,
+          "../../../packages/captions/src/remotion-entry.tsx",
+        );
+    // The packaged app points at a copy of the composition inside
+    // node_modules. Webpack trusts everything there by package version, which
+    // never changes for a workspace package, so its persistent cache would
+    // keep rendering the composition of an older install after an update.
+    const packaged = Boolean(env.REMOTION_ENTRY_POINT);
+    if (packaged) {
+      // Left behind by builds that still cached; nothing reads it any more.
+      void rm(join(dirname(entryPoint), "../node_modules/.cache"), {
+        recursive: true,
+        force: true,
+      }).catch(() => undefined);
+    }
+    bundlePromise = bundle({ entryPoint, enableCaching: !packaged }).catch(
+      (error: unknown) => {
+        // Let the next export try again instead of failing for good.
+        bundlePromise = null;
+        throw error;
+      },
+    );
   }
   return bundlePromise;
 };
@@ -150,8 +171,7 @@ const transcribeProject = async (store: ProjectStore, projectId: string) => {
 
 const exportProject = async (store: ProjectStore, projectId: string) => {
   const project = await store.requireById(projectId);
-  const transcript = project.transcript as { words?: CaptionWord[] } | null;
-  const words = transcript?.words ?? [];
+  const words = transcriptWords(project.transcript, project.durationSeconds);
   if (!project.durationSeconds || words.length === 0)
     throw new Error("Project has no completed transcript");
 
@@ -162,14 +182,18 @@ const exportProject = async (store: ProjectStore, projectId: string) => {
     const serveUrl = await getBundle();
     const inputProps = {
       words,
-      style: project.captionStyle as CaptionStyle,
+      style: normalizeCaptionStyle(project.captionStyle),
       durationSeconds: project.durationSeconds,
       includeAudio: false,
     };
+    const browserExecutable = env.REMOTION_BROWSER_EXECUTABLE
+      ? plainPath(env.REMOTION_BROWSER_EXECUTABLE)
+      : undefined;
     const composition = await selectComposition({
       serveUrl,
       id: "CaptionOverlay",
       inputProps,
+      browserExecutable,
     });
     let lastReportedProgress = 1;
     let lastProgressWriteAt = 0;
@@ -189,7 +213,7 @@ const exportProject = async (store: ProjectStore, projectId: string) => {
         enableMultiProcessOnLinux: true,
         ...(env.REMOTION_GL ? { gl: env.REMOTION_GL } : {}),
       },
-      browserExecutable: env.REMOTION_BROWSER_EXECUTABLE,
+      browserExecutable,
       onProgress: ({ progress }) => {
         const percentage = Math.min(
           99,
