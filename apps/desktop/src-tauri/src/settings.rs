@@ -78,6 +78,11 @@ pub fn save_settings(data_dir: &Path, input: SettingsInput) -> Result<(), String
     entry.set_password(&key).map_err(|error| {
         format!("Could not store the Groq API key in the operating system credential manager: {error}")
     })?;
+    if read_groq_key().as_deref() != Some(key.as_str()) {
+        return Err(
+            "The operating system credential manager did not keep the Groq API key.".into(),
+        );
+    }
 
     let gpu = input
         .gpu_frame_acceleration

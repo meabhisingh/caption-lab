@@ -16,10 +16,20 @@ export type DesktopBridge = {
 const inTauri = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+// Tauri rejects with plain strings; callers read `error.message`.
+const toError = (reason: unknown) =>
+  reason instanceof Error
+    ? reason
+    : new Error(typeof reason === "string" ? reason : JSON.stringify(reason));
+
 export const loadDesktopBridge = async (): Promise<DesktopBridge | null> => {
   if (!inTauri()) return null;
-  const { invoke } = await import("@tauri-apps/api/core");
+  const core = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
+  const invoke = <T>(command: string, args?: Record<string, unknown>) =>
+    core.invoke<T>(command, args).catch((reason: unknown) => {
+      throw toError(reason);
+    });
   return {
     getSettings: () => invoke<DesktopSnapshot>("get_settings"),
     saveSettings: (settings) =>

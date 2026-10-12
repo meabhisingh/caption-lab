@@ -161,6 +161,16 @@ export function CaptionStudio() {
       setError("Choose an audio or video file.");
       return;
     }
+    if (desktopStatus && desktopStatus.state !== "ready") {
+      setError(
+        desktopStatus.error ??
+          (desktopStatus.configured
+            ? "The local API is still starting. Try again in a moment."
+            : "Enter a Groq API key in Settings to start the local API."),
+      );
+      if (!desktopStatus.configured) setSettingsOpen(true);
+      return;
+    }
     setError(null);
     setUploading(true);
     setProject(null);
@@ -187,7 +197,7 @@ export function CaptionStudio() {
     } finally {
       setUploading(false);
     }
-  }, []);
+  }, [desktopStatus]);
 
   const saveStyle = useCallback(
     async (nextStyle: CaptionStyle) => {
@@ -350,7 +360,7 @@ export function CaptionStudio() {
             }}
             onSaved={(snapshot) => {
               setDesktopStatus(snapshot);
-              setSettingsOpen(false);
+              if (snapshot.state !== "error") setSettingsOpen(false);
             }}
           />
         ) : null}
@@ -537,7 +547,7 @@ export function CaptionStudio() {
           }}
           onSaved={(snapshot) => {
             setDesktopStatus(snapshot);
-            setSettingsOpen(false);
+            if (snapshot.state !== "error") setSettingsOpen(false);
           }}
         />
       ) : null}
