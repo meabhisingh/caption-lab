@@ -29,6 +29,21 @@ type ObjectStorage = {
 const asText = (value: SQLOutputValue | undefined) =>
   typeof value === "string" ? value : null;
 
+/**
+ * A `Content-Disposition` value for a download. Header values are Latin-1, so
+ * the name goes in twice: an ASCII stand-in, and the real name percent-encoded
+ * (RFC 5987) for browsers that read it.
+ */
+export const attachmentDisposition = (name: string) => {
+  const clean = name.replace(/[\u0000-\u001f\u007f"\\]/g, "");
+  const ascii = clean.replace(/[^\x20-\x7e]/g, "_") || "download";
+  const encoded = encodeURIComponent(clean).replace(
+    /['()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+};
+
 const resolveObjectPath = (key: string) => {
   const normalized = key.replaceAll("\\", "/").replace(/^\/+/, "");
   if (
@@ -121,7 +136,7 @@ const createS3Storage = (): ObjectStorage => {
           Bucket: bucket,
           Key: key,
           ResponseContentDisposition: downloadName
-            ? `attachment; filename="${downloadName.replaceAll('"', "")}"`
+            ? attachmentDisposition(downloadName)
             : undefined,
         }),
         { expiresIn: 60 * 60 },

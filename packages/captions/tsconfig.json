@@ -1,5 +1,9 @@
 {
   "extends": "@caption-generator/config/tsconfig.base.json",
-  "compilerOptions": { "jsx": "react-jsx", "noUnusedLocals": false },
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ESNext", "DOM"],
+    "noUnusedLocals": false
+  },
   "include": ["src"]
 }

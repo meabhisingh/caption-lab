@@ -5,11 +5,26 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./composition": "./src/composition.ts",
     "./remotion-entry": "./src/remotion-entry.tsx"
   },
-  "scripts": { "check-types": "tsc --noEmit" },
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
   "dependencies": {
     "@caption-generator/types": "workspace:*",
+    "@fontsource-variable/fredoka": "5.3.0",
+    "@fontsource-variable/inter": "5.3.0",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "@fontsource-variable/montserrat": "5.3.0",
+    "@fontsource-variable/oswald": "5.3.0",
+    "@fontsource-variable/playfair-display": "5.3.0",
+    "@fontsource/anton": "5.3.0",
+    "@fontsource/archivo-black": "5.3.0",
+    "@fontsource/bangers": "5.3.0",
+    "@fontsource/bebas-neue": "5.3.0",
+    "@fontsource/permanent-marker": "5.3.0",
+    "@fontsource/poppins": "5.3.0",
     "@remotion/media": "4.0.521",
     "react": "19.2.8",
     "remotion": "4.0.521"
@@ -19,5 +34,7 @@
     "@types/react": "^19.2.18",
     "typescript": "^5.9.3"
   },
-  "peerDependencies": { "react": "^19.2.0" }
+  "peerDependencies": {
+    "react": "^19.2.0"
+  }
 }

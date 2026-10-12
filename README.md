@@ -16,10 +16,40 @@ CaptionLab turns uploaded audio or video into a transparent, word-synced caption
 - `apps/web` — Next.js 16 editor and Remotion Player preview
 - `apps/server` — Hono API, worker, FFmpeg, Groq, and Remotion rendering. Hosted mode uses Postgres, Redis, and S3. Desktop mode uses SQLite, a local file folder, and an on-disk job queue.
 - `apps/desktop` — Tauri shell that runs the editor and API on the local machine
-- `packages/captions` — shared word-highlight composition and five style presets
+- `packages/captions` — shared word-highlight composition, the style templates, the bundled caption fonts, and the style and word clean-up shared by the editor and the API
 - `packages/db` — Prisma client, schema, and migrations
 - `packages/queue` — typed BullMQ queue
 - `packages/types` — shared API, project, word, and style contracts
+
+## Editor
+
+Once a file is transcribed the editor opens with a live preview, a timeline, and four tabs:
+
+- **Edit** — the transcript, grouped the way the captions break into lines. Change a word's text, move its start and end, split, merge, add or delete words, or restore the original transcript.
+- **Text** — fourteen templates, and every setting behind them: font, weight, size, letter spacing, text and highlight colors, the box behind the spoken word, the box behind the line, outline, shadow, animation, and words per line.
+- **Layers** — where the caption sits (position, width, alignment, rotation, opacity; it can also be dragged on the canvas), plus two layers that exist only in the editor: a backdrop (transparent, solid, or the source video) and a safe-area guide for TikTok, Reels, and Shorts.
+- **Audio** — playback volume and speed, the waveform, and a control that shifts every caption earlier or later.
+
+The timeline shows each word at its real position in time. Drag its top edge to resize it, click to seek, double-click a word to retype it, and zoom in to drag a selected word's edges and retime it. Edits are saved automatically and can be undone with Ctrl+Z. The open project is named in the address (`?project=<id>`), so a reload returns to it, and the landing page offers the last project again.
+
+The fonts in `packages/captions/src/fonts.ts` marked `bundled` ship with the app, so the preview and the export render them identically on every machine. System fonts depend on what is installed where the export runs. The bundled fonts are open source (SIL Open Font License 1.1, and Apache 2.0 for Permanent Marker); their notices are in `apps/web/public/licenses/fonts.txt` and are served at `/licenses/fonts.txt`.
+
+On the hosted API the waveform is drawn from the normalized audio in S3, which the browser fetches directly. That needs a CORS rule on the bucket allowing `GET` from the editor's origin; without one the editor works as before and only the waveform is missing.
+
+Caption styles carry a `version`. Styles saved before version 2 are migrated when they are read and keep the look they rendered with.
+
+### API
+
+| Route                                | Purpose                                          |
+| ------------------------------------ | ------------------------------------------------ |
+| `POST /api/projects`                 | Upload a file and queue transcription            |
+| `GET /api/projects/:id`              | Project status, words, style, and download links |
+| `PATCH /api/projects/:id/style`      | Save the caption style                           |
+| `PATCH /api/projects/:id/words`      | Save edited words                                |
+| `POST /api/projects/:id/words/reset` | Restore the words from the original transcript   |
+| `POST /api/projects/:id/export`      | Queue the overlay render                         |
+
+Saving a style or words after an export has finished marks the project ready to export again. Both are refused with `409` while an export is rendering. A style body should carry `version: 2`; one without it and without any version 2 field is read as the older format.
 
 ## Local setup
 

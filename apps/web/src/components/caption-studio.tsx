@@ -1,41 +1,26 @@
 "use client";
 
+import type { CaptionProject } from "@caption-generator/types";
 import {
-  CaptionComposition,
-  CAPTION_TEMPLATES,
-  DEFAULT_CAPTION_STYLE,
-} from "@caption-generator/captions";
-import type {
-  CaptionProject,
-  CaptionStyle,
-  CaptionTemplateId,
-} from "@caption-generator/types";
-import { Player } from "@remotion/player";
-import {
+  ArrowRight,
   Captions,
-  CircleAlert,
   Check,
-  ChevronDown,
+  CircleAlert,
   CircleHelp,
-  Download,
   Film,
   Gauge,
-  Layers3,
   LoaderCircle,
-  Music2,
-  Play,
   Plus,
-  RotateCcw,
-  Scissors,
   Settings,
   ShieldCheck,
   Sparkles,
-  Type,
   UploadCloud,
-  WandSparkles,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { StudioEditor } from "@/components/studio/editor";
+import { StudioProvider } from "@/components/studio/studio-context";
+import { createProject, fetchProject } from "@/lib/api";
 import {
   loadDesktopBridge,
   type DesktopBridge,
@@ -44,37 +29,42 @@ import {
   type DesktopSnapshot,
 } from "@/lib/desktop";
 
-const SERVER_URL =
-  process.env.NEXT_PUBLIC_SERVER_URL ?? "http://localhost:4000";
-const TEMPLATE_META: Array<{
-  id: CaptionTemplateId;
-  name: string;
-  note: string;
-}> = [
-  { id: "viral", name: "Viral pop", note: "Bold · Punchy" },
-  { id: "clean", name: "Clean slate", note: "Minimal · Clear" },
-  { id: "neon", name: "Night neon", note: "Glow · Energy" },
-  { id: "boxed", name: "Editorial", note: "Boxed · Modern" },
-  { id: "karaoke", name: "Karaoke", note: "Soft · Musical" },
-];
+// The open project is named in the address so a reload comes back to it, and
+// the last one is remembered so the desktop app can offer it after a restart.
+const PROJECT_PARAM = "project";
+const RECENT_PROJECT_KEY = "captionlab:recent-project";
 
-const formatTime = (seconds: number) => {
-  const safe = Math.max(0, seconds);
-  return `${Math.floor(safe / 60)}:${Math.floor(safe % 60)
-    .toString()
-    .padStart(2, "0")}`;
+type RecentProject = { id: string; fileName: string };
+
+const readRecentProject = (): RecentProject | null => {
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem(RECENT_PROJECT_KEY) ?? "null",
+    ) as Partial<RecentProject> | null;
+    return typeof stored?.id === "string" && typeof stored.fileName === "string"
+      ? { id: stored.id, fileName: stored.fileName }
+      : null;
+  } catch {
+    return null;
+  }
 };
 
-async function parseResponse<T>(response: Response): Promise<T> {
-  const body = (await response.json()) as T & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? "Request failed");
-  return body;
-}
+const forgetProject = () => {
+  try {
+    window.localStorage.removeItem(RECENT_PROJECT_KEY);
+  } catch {
+    // Storage is unavailable; there is nothing to forget.
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.delete(PROJECT_PARAM);
+  window.history.replaceState(null, "", url);
+};
 
 export function CaptionStudio() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [project, setProject] = useState<CaptionProject | null>(null);
-  const [style, setStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
+  const [opening, setOpening] = useState(false);
+  const [recent, setRecent] = useState<RecentProject | null>(null);
   const [localMediaUrl, setLocalMediaUrl] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -92,19 +82,25 @@ export function CaptionStudio() {
     projectStatus === "PROCESSING" ||
     projectStatus === "EXPORTING";
 
+  // Keeps the record of the open project in step with the API. The editor
+  // owns the style and words; this only carries status, progress and links.
+  const adoptProject = useCallback(
+    (next: CaptionProject) =>
+      setProject((current) => (current?.id === next.id ? next : current)),
+    [],
+  );
+
   useEffect(() => {
     if (!projectId || !shouldPoll) return;
     let cancelled = false;
     const timer = window.setInterval(async () => {
       try {
-        const response = await fetch(`${SERVER_URL}/api/projects/${projectId}`);
-        const next = await parseResponse<CaptionProject>(response);
-        if (!cancelled) {
-          setProject(next);
-          setStyle(next.style);
-          if (next.status === "FAILED")
-            setError(next.error ?? "Processing failed");
-        }
+        const next = await fetchProject(projectId);
+        if (cancelled) return;
+        adoptProject(next);
+        // A failed transcription is explained on the canvas itself.
+        if (next.status === "FAILED" && next.words.length > 0)
+          setError(next.error ?? "Export failed");
       } catch (pollError) {
         if (!cancelled)
           setError(
@@ -118,7 +114,7 @@ export function CaptionStudio() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [projectId, shouldPoll]);
+  }, [adoptProject, projectId, shouldPoll]);
 
   useEffect(() => {
     let cancelled = false;
@@ -156,90 +152,91 @@ export function CaptionStudio() {
     [localMediaUrl],
   );
 
-  const upload = useCallback(async (file: File) => {
-    if (!file.type.startsWith("audio/") && !file.type.startsWith("video/")) {
-      setError("Choose an audio or video file.");
-      return;
-    }
-    if (desktopStatus && desktopStatus.state !== "ready") {
-      setError(
-        desktopStatus.error ??
-          (desktopStatus.configured
-            ? "The local API is still starting. Try again in a moment."
-            : "Enter a Groq API key in Settings to start the local API."),
-      );
-      if (!desktopStatus.configured) setSettingsOpen(true);
-      return;
-    }
+  const openProject = useCallback(async (id: string) => {
     setError(null);
-    setUploading(true);
-    setProject(null);
-    setStyle(DEFAULT_CAPTION_STYLE);
-    setLocalMediaUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return URL.createObjectURL(file);
-    });
+    setOpening(true);
     try {
-      const form = new FormData();
-      form.set("file", file);
-      const created = await parseResponse<CaptionProject>(
-        await fetch(`${SERVER_URL}/api/projects`, {
-          method: "POST",
-          body: form,
-        }),
-      );
-      setProject(created);
-      setStyle(created.style);
-    } catch (uploadError) {
+      setProject(await fetchProject(id));
+    } catch (openError) {
+      // A project that is gone should not be offered again.
+      const missing =
+        openError instanceof Error && /not found/i.test(openError.message);
+      if (missing) {
+        forgetProject();
+        setRecent(null);
+      }
       setError(
-        uploadError instanceof Error ? uploadError.message : "Upload failed",
+        missing
+          ? "That project is no longer available."
+          : openError instanceof Error
+            ? openError.message
+            : "Could not open the project",
       );
     } finally {
-      setUploading(false);
+      setOpening(false);
     }
-  }, [desktopStatus]);
+  }, []);
 
-  const saveStyle = useCallback(
-    async (nextStyle: CaptionStyle) => {
-      setStyle(nextStyle);
-      if (!projectId) return;
-      try {
-        const response = await fetch(
-          `${SERVER_URL}/api/projects/${projectId}/style`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(nextStyle),
-          },
-        );
-        setProject(await parseResponse<CaptionProject>(response));
-      } catch (saveError) {
+  // A reload returns to the project named in the address.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get(PROJECT_PARAM);
+    setRecent(readRecentProject());
+    if (id) void openProject(id);
+  }, [openProject]);
+
+  const fileName = project?.fileName;
+  useEffect(() => {
+    if (!projectId || !fileName) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get(PROJECT_PARAM) !== projectId) {
+      url.searchParams.set(PROJECT_PARAM, projectId);
+      window.history.replaceState(null, "", url);
+    }
+    try {
+      window.localStorage.setItem(
+        RECENT_PROJECT_KEY,
+        JSON.stringify({ id: projectId, fileName }),
+      );
+    } catch {
+      // Without storage the project is simply not offered after a restart.
+    }
+  }, [fileName, projectId]);
+
+  const upload = useCallback(
+    async (file: File) => {
+      if (!file.type.startsWith("audio/") && !file.type.startsWith("video/")) {
+        setError("Choose an audio or video file.");
+        return;
+      }
+      if (desktopStatus && desktopStatus.state !== "ready") {
         setError(
-          saveError instanceof Error
-            ? saveError.message
-            : "Could not save style",
+          desktopStatus.error ??
+            (desktopStatus.configured
+              ? "The local API is still starting. Try again in a moment."
+              : "Enter a Groq API key in Settings to start the local API."),
         );
+        if (!desktopStatus.configured) setSettingsOpen(true);
+        return;
+      }
+      setError(null);
+      setUploading(true);
+      setProject(null);
+      setLocalMediaUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return URL.createObjectURL(file);
+      });
+      try {
+        setProject(await createProject(file));
+      } catch (uploadError) {
+        setError(
+          uploadError instanceof Error ? uploadError.message : "Upload failed",
+        );
+      } finally {
+        setUploading(false);
       }
     },
-    [projectId],
+    [desktopStatus],
   );
-
-  const exportOverlay = async () => {
-    if (!projectId) return;
-    setError(null);
-    try {
-      await saveStyle(style);
-      const response = await fetch(
-        `${SERVER_URL}/api/projects/${projectId}/export`,
-        { method: "POST" },
-      );
-      setProject(await parseResponse<CaptionProject>(response));
-    } catch (exportError) {
-      setError(
-        exportError instanceof Error ? exportError.message : "Export failed",
-      );
-    }
-  };
 
   const downloadOverlay = async () => {
     if (!project?.exportUrl) return;
@@ -257,24 +254,54 @@ export function CaptionStudio() {
     }
   };
 
-  const playerProps = useMemo(
-    () => ({
-      words: project?.words ?? [],
-      style,
-      durationSeconds: project?.durationSeconds ?? 1,
-      audioSrc: localMediaUrl ?? project?.sourceUrl ?? undefined,
-      includeAudio: true,
-    }),
-    [
-      localMediaUrl,
-      project?.durationSeconds,
-      project?.sourceUrl,
-      project?.words,
-      style,
-    ],
+  const settingsModal =
+    settingsOpen && desktopStatus ? (
+      <DesktopSettingsModal
+        snapshot={desktopStatus}
+        onClose={() => setSettingsOpen(false)}
+        onSave={(draft) => {
+          const desktop = desktopRef.current;
+          if (!desktop) throw new Error("Desktop bridge is unavailable.");
+          return desktop.saveSettings(draft);
+        }}
+        onSaved={(snapshot) => {
+          setDesktopStatus(snapshot);
+          if (snapshot.state !== "error") setSettingsOpen(false);
+        }}
+      />
+    ) : null;
+
+  const fileInput = (
+    <input
+      ref={inputRef}
+      className="sr-only"
+      type="file"
+      accept="audio/*,video/*"
+      onChange={(event) => {
+        const file = event.target.files?.[0];
+        // Clearing the value lets the same file be picked again later.
+        event.target.value = "";
+        if (file) void upload(file);
+      }}
+    />
   );
 
-  if (!project && !uploading) {
+  const resume = () => {
+    if (!recent) return;
+    if (desktopStatus && desktopStatus.state !== "ready") {
+      setError(
+        desktopStatus.error ??
+          (desktopStatus.configured
+            ? "The local API is still starting. Try again in a moment."
+            : "Enter a Groq API key in Settings to start the local API."),
+      );
+      if (!desktopStatus.configured) setSettingsOpen(true);
+      return;
+    }
+    void openProject(recent.id);
+  };
+
+  if (!project && !uploading && !opening) {
     return (
       <main className="min-h-screen bg-[#08080a] text-white selection:bg-lime-300 selection:text-black">
         <Header
@@ -308,6 +335,26 @@ export function CaptionStudio() {
                 Alpha WebM
               </span>
             </div>
+            {recent ? (
+              <button
+                type="button"
+                onClick={resume}
+                className="mt-9 flex max-w-full items-center gap-3 rounded-2xl border border-white/10 bg-white/3 px-4 py-3 text-left transition hover:border-lime-300/40 hover:bg-lime-300/5"
+              >
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-lime-300/20 bg-lime-300/10 text-lime-300">
+                  <Film size={17} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-xs text-zinc-500">
+                    Continue where you left off
+                  </span>
+                  <span className="block truncate text-sm font-semibold text-zinc-100">
+                    {recent.fileName}
+                  </span>
+                </span>
+                <ArrowRight size={16} className="shrink-0 text-zinc-500" />
+              </button>
+            ) : null}
           </div>
           <label
             className={`group relative flex min-h-[430px] cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[32px] border bg-[#111114] p-9 text-center transition ${isDragging ? "border-lime-300 bg-lime-300/5" : "border-white/10 hover:border-white/25"}`}
@@ -321,16 +368,7 @@ export function CaptionStudio() {
               if (file) void upload(file);
             }}
           >
-            <input
-              ref={inputRef}
-              className="sr-only"
-              type="file"
-              accept="audio/*,video/*"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void upload(file);
-              }}
-            />
+            {fileInput}
             <div className="absolute inset-0 opacity-30 [background-image:radial-gradient(circle_at_center,rgba(185,255,55,.18),transparent_48%)]" />
             <div className="relative grid size-24 place-items-center rounded-3xl border border-lime-300/20 bg-lime-300/10 text-lime-300 shadow-[0_0_80px_rgba(180,255,50,.12)] transition group-hover:scale-105">
               <UploadCloud size={38} strokeWidth={1.6} />
@@ -349,250 +387,119 @@ export function CaptionStudio() {
             ) : null}
           </label>
         </section>
-        {settingsOpen && desktopStatus ? (
-          <DesktopSettingsModal
-            snapshot={desktopStatus}
-            onClose={() => setSettingsOpen(false)}
-            onSave={(draft) => {
-              const desktop = desktopRef.current;
-              if (!desktop) throw new Error("Desktop bridge is unavailable.");
-              return desktop.saveSettings(draft);
-            }}
-            onSaved={(snapshot) => {
-              setDesktopStatus(snapshot);
-              if (snapshot.state !== "error") setSettingsOpen(false);
-            }}
-          />
-        ) : null}
+        {settingsModal}
       </main>
     );
   }
 
   return (
-    <main className="flex h-screen min-h-[720px] flex-col overflow-hidden bg-[#09090b] text-zinc-100">
+    <main className="relative flex h-screen min-h-[620px] flex-col overflow-hidden bg-[#09090b] text-zinc-100">
       <Header
         onNew={() => inputRef.current?.click()}
         onSettings={desktopStatus ? () => setSettingsOpen(true) : undefined}
         desktopState={desktopStatus?.state}
       />
-      <input
-        ref={inputRef}
-        className="sr-only"
-        type="file"
-        accept="audio/*,video/*"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) void upload(file);
-        }}
-      />
-      <div className="flex min-h-0 flex-1">
-        <ToolRail />
-        <section className="flex min-w-0 flex-1 flex-col bg-[#0d0d10]">
-          <div className="flex h-12 items-center justify-between border-b border-white/[0.07] px-5 text-xs text-zinc-500">
-            <div className="flex items-center gap-2">
-              <Film size={14} /> {project?.fileName ?? "Uploading media..."}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="size-1.5 rounded-full bg-lime-300" /> Autosaved
-            </div>
-          </div>
-          <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-6">
-            <div className="absolute inset-0 opacity-40 [background-image:radial-gradient(#303038_1px,transparent_1px)] [background-size:20px_20px]" />
-            <div className="relative aspect-[9/16] h-[min(64vh,680px)] overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(45deg,#242429_25%,transparent_25%),linear-gradient(-45deg,#242429_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#242429_75%),linear-gradient(-45deg,transparent_75%,#242429_75%)] bg-[length:22px_22px] bg-[position:0_0,0_11px,11px_-11px,-11px_0px] shadow-2xl shadow-black/50">
-              {project?.durationSeconds && project.words.length > 0 ? (
-                <Player
-                  component={CaptionComposition}
-                  inputProps={playerProps}
-                  durationInFrames={Math.max(
-                    1,
-                    Math.ceil(project.durationSeconds * project.fps),
-                  )}
-                  compositionWidth={project.width}
-                  compositionHeight={project.height}
-                  fps={project.fps}
-                  controls
-                  showVolumeControls
-                  style={{ width: "100%", height: "100%" }}
-                />
-              ) : (
-                <ProcessingState
-                  status={
-                    uploading ? "UPLOADED" : (project?.status ?? "UPLOADED")
-                  }
-                />
-              )}
-              {project?.status === "EXPORTING" ? (
-                <RenderProgressOverlay progress={project.renderProgress} />
-              ) : null}
-            </div>
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-white/10 bg-black/70 px-3 py-1 text-[10px] font-medium uppercase tracking-widest text-zinc-400 backdrop-blur">
-              Transparent canvas
-            </div>
-          </div>
-          <Timeline project={project} />
-        </section>
-        <aside className="hidden w-[310px] shrink-0 overflow-y-auto border-l border-white/[0.07] bg-[#111114] xl:block">
-          <div className="border-b border-white/[0.07] p-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Caption style</h2>
-              <RotateCcw size={14} className="text-zinc-600" />
-            </div>
-            <p className="mt-1 text-xs text-zinc-500">
-              Pick a look, then make it yours.
-            </p>
-          </div>
-          <div className="grid grid-cols-2 gap-3 p-4">
-            {TEMPLATE_META.map((template) => {
-              const templateStyle = CAPTION_TEMPLATES[template.id];
-              const selected = style.templateId === template.id;
-              return (
-                <button
-                  key={template.id}
-                  onClick={() => void saveStyle({ ...templateStyle })}
-                  className={`relative overflow-hidden rounded-xl border p-2.5 text-left transition ${selected ? "border-lime-300 bg-lime-300/5" : "border-white/[0.08] bg-white/[0.025] hover:border-white/20"}`}
-                >
-                  {selected ? (
-                    <span className="absolute right-2 top-2 grid size-4 place-items-center rounded-full bg-lime-300 text-black">
-                      <Check size={10} strokeWidth={3} />
-                    </span>
-                  ) : null}
-                  <div
-                    className="grid h-16 place-items-center rounded-lg bg-[#1a1a1e] text-center"
-                    style={{ fontFamily: templateStyle.fontFamily }}
-                  >
-                    <span
-                      className="text-base font-black"
-                      style={{
-                        color: templateStyle.activeColor,
-                        WebkitTextStroke: `${Math.min(2, templateStyle.strokeWidth)}px ${templateStyle.strokeColor}`,
-                      }}
-                    >
-                      SAY IT
-                    </span>
-                  </div>
-                  <p className="mt-2.5 text-xs font-semibold text-zinc-200">
-                    {template.name}
-                  </p>
-                  <p className="mt-0.5 text-[10px] text-zinc-600">
-                    {template.note}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-          <StyleControls
-            style={style}
-            onChange={(next) => void saveStyle(next)}
-          />
-          <div className="sticky bottom-0 border-t border-white/[0.07] bg-[#111114]/95 p-4 backdrop-blur">
-            {project?.status === "COMPLETE" && project.exportUrl ? (
-              desktopStatus ? (
-                <button
-                  onClick={() => void downloadOverlay()}
-                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-lime-300 text-sm font-bold text-black hover:bg-lime-200"
-                >
-                  <Download size={16} /> Save WebM
-                </button>
-              ) : (
-                <a
-                  href={project.exportUrl}
-                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-lime-300 text-sm font-bold text-black hover:bg-lime-200"
-                >
-                  <Download size={16} /> Download WebM
-                </a>
-              )
-            ) : (
-              <button
-                disabled={
-                  !project ||
-                  ["PROCESSING", "UPLOADED", "EXPORTING"].includes(
-                    project.status,
-                  )
-                }
-                onClick={() => void exportOverlay()}
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-lime-300 text-sm font-bold text-black transition hover:bg-lime-200 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
-              >
-                {project?.status === "EXPORTING" ? (
-                  <LoaderCircle className="animate-spin" size={16} />
-                ) : (
-                  <Download size={16} />
-                )}
-                {project?.status === "EXPORTING"
-                  ? `Rendering overlay · ${project.renderProgress}%`
-                  : "Export transparent WebM"}
-              </button>
-            )}
-            {project?.status === "EXPORTING" ? (
-              <ProgressBar progress={project.renderProgress} />
-            ) : null}
-            <p className="mt-2 text-center text-[10px] text-zinc-600">
-              VP9 alpha · 1080 × 1920 · no background
-            </p>
-          </div>
-        </aside>
-      </div>
+      {fileInput}
+      {project ? (
+        <StudioProvider
+          key={project.id}
+          project={project}
+          mediaSrc={localMediaUrl ?? project.sourceUrl}
+          onProjectChange={adoptProject}
+          onError={setError}
+          saveExport={desktopStatus ? downloadOverlay : null}
+        >
+          <StudioEditor />
+        </StudioProvider>
+      ) : (
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-[#0d0d10] text-sm text-zinc-400">
+          <LoaderCircle className="animate-spin text-lime-300" size={26} />
+          {uploading ? "Uploading your media…" : "Opening your project…"}
+        </div>
+      )}
       {error ? (
-        <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-red-400/20 bg-red-950/90 px-4 py-3 text-sm text-red-200 shadow-xl">
-          {error}
+        <div
+          role="alert"
+          className="fixed bottom-5 left-1/2 z-50 flex max-w-[min(90vw,640px)] -translate-x-1/2 items-start gap-3 rounded-xl border border-red-400/20 bg-red-950/90 px-4 py-3 text-sm text-red-200 shadow-xl"
+        >
+          <span className="min-w-0 break-words">{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+            className="shrink-0 rounded text-red-300 hover:text-white"
+          >
+            <X size={16} />
+          </button>
         </div>
       ) : null}
-      {settingsOpen && desktopStatus ? (
-        <DesktopSettingsModal
-          snapshot={desktopStatus}
-          onClose={() => setSettingsOpen(false)}
-          onSave={(draft) => {
-            const desktop = desktopRef.current;
-            if (!desktop) throw new Error("Desktop bridge is unavailable.");
-            return desktop.saveSettings(draft);
-          }}
-          onSaved={(snapshot) => {
-            setDesktopStatus(snapshot);
-            if (snapshot.state !== "error") setSettingsOpen(false);
-          }}
-        />
-      ) : null}
+      {settingsModal}
     </main>
   );
 }
 
-function ProgressBar({ progress }: { progress: number }) {
-  const safeProgress = Math.min(100, Math.max(0, progress));
-  return (
-    <div
-      className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.08]"
-      role="progressbar"
-      aria-label="Render progress"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={safeProgress}
-    >
-      <div
-        className="h-full rounded-full bg-lime-300 transition-[width] duration-500 ease-out"
-        style={{ width: `${safeProgress}%` }}
-      />
-    </div>
-  );
-}
+const SHORTCUTS: ReadonlyArray<readonly [keys: string, action: string]> = [
+  ["Space", "Play or pause"],
+  ["← →", "Step one frame; with Shift, one second"],
+  ["Ctrl+Z", "Undo; Ctrl+Shift+Z redoes"],
+  ["Double-click", "Retype a word in the timeline"],
+  ["Drag", "The timeline's top edge resizes it"],
+  ["Ctrl+wheel", "Zoom the timeline"],
+  ["Layers tab", "Drag the captions on the canvas"],
+];
 
-function RenderProgressOverlay({ progress }: { progress: number }) {
-  const safeProgress = Math.min(99, Math.max(1, progress));
+function HelpMenu() {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !root.current?.contains(event.target))
+        setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
   return (
-    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/55 px-8 backdrop-blur-[2px]">
-      <div className="w-full max-w-[260px] rounded-2xl border border-white/10 bg-[#111114]/95 p-5 shadow-2xl">
-        <div className="flex items-center justify-between">
-          <span className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
-            <LoaderCircle className="animate-spin text-lime-300" size={15} />
-            Rendering overlay
-          </span>
-          <span className="font-mono text-sm font-bold text-lime-300">
-            {safeProgress}%
-          </span>
+    <div ref={root} className="relative hidden sm:block">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-label="Shortcuts and tips"
+        aria-expanded={open}
+        className="grid size-9 place-items-center rounded-lg border border-white/10 text-zinc-500 hover:text-white"
+      >
+        <CircleHelp size={17} />
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-11 z-50 w-80 rounded-xl border border-white/10 bg-[#141418] p-4 shadow-2xl shadow-black">
+          <p className="text-xs font-semibold text-zinc-200">
+            Shortcuts and tips
+          </p>
+          <dl className="mt-3 space-y-2.5">
+            {SHORTCUTS.map(([keys, action]) => (
+              <div
+                key={keys}
+                className="flex items-baseline justify-between gap-4 text-xs"
+              >
+                <dt className="shrink-0 rounded border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-zinc-300">
+                  {keys}
+                </dt>
+                <dd className="text-right leading-4 text-zinc-500">{action}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
-        <ProgressBar progress={safeProgress} />
-        <p className="mt-3 text-[10px] leading-4 text-zinc-500">
-          Rendering frames and encoding transparent VP9
-        </p>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -638,12 +545,7 @@ function Header({
             <Settings size={15} /> Settings
           </button>
         ) : null}
-        <button
-          className="hidden size-9 place-items-center rounded-lg border border-white/10 text-zinc-500 hover:text-white sm:grid"
-          aria-label="Help"
-        >
-          <CircleHelp size={17} />
-        </button>
+        <HelpMenu />
         <button
           onClick={onNew}
           className="flex h-9 items-center gap-2 rounded-lg border border-white/10 px-3 text-xs font-semibold text-zinc-300 hover:border-white/20 hover:bg-white/5"
@@ -691,7 +593,13 @@ function DesktopSettingsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+    // aria-modal also tells the editor to leave the keyboard to this dialog.
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Desktop settings"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+    >
       <form
         onSubmit={(event) => void save(event)}
         className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-white/10 bg-[#111114] shadow-2xl shadow-black"
@@ -825,194 +733,5 @@ function DesktopSettingsModal({
         </div>
       </form>
     </div>
-  );
-}
-
-function ToolRail() {
-  const tools = [
-    { icon: Scissors, label: "Edit" },
-    { icon: Type, label: "Text" },
-    { icon: Layers3, label: "Layers" },
-    { icon: Music2, label: "Audio" },
-  ];
-  return (
-    <nav className="hidden w-[76px] shrink-0 border-r border-white/[0.07] bg-[#111114] py-4 md:block">
-      {tools.map(({ icon: Icon, label }, index) => (
-        <button
-          key={label}
-          className={`mx-auto mb-2 flex w-14 flex-col items-center gap-1.5 rounded-xl py-3 text-[10px] transition ${index === 1 ? "bg-lime-300/10 text-lime-300" : "text-zinc-600 hover:bg-white/5 hover:text-zinc-300"}`}
-        >
-          <Icon size={18} />
-          <span>{label}</span>
-        </button>
-      ))}
-    </nav>
-  );
-}
-
-function ProcessingState({ status }: { status: CaptionProject["status"] }) {
-  const exporting = status === "EXPORTING";
-  return (
-    <div className="flex h-full flex-col items-center justify-center bg-[#121216] px-8 text-center">
-      <div className="relative grid size-20 place-items-center rounded-full border border-lime-300/20 bg-lime-300/5 text-lime-300">
-        <span className="absolute inset-0 animate-ping rounded-full border border-lime-300/20" />
-        <WandSparkles size={28} />
-      </div>
-      <h3 className="mt-6 text-lg font-semibold">
-        {exporting ? "Rendering every frame" : "Listening for every word"}
-      </h3>
-      <p className="mt-2 max-w-xs text-sm leading-6 text-zinc-500">
-        {exporting
-          ? "Building your transparent VP9 overlay. Longer clips need a little more time."
-          : "Extracting clean audio and generating word-level timestamps with Groq Whisper."}
-      </p>
-      <div className="mt-7 h-1.5 w-44 overflow-hidden rounded-full bg-white/5">
-        <div className="h-full w-2/5 animate-[loading_1.4s_ease-in-out_infinite] rounded-full bg-lime-300" />
-      </div>
-    </div>
-  );
-}
-
-function Timeline({ project }: { project: CaptionProject | null }) {
-  const duration = project?.durationSeconds ?? 0;
-  return (
-    <div className="h-[166px] shrink-0 border-t border-white/[0.07] bg-[#111114]">
-      <div className="flex h-10 items-center justify-between border-b border-white/[0.06] px-4">
-        <div className="flex items-center gap-2">
-          <button
-            className="grid size-6 place-items-center rounded-full bg-zinc-100 text-black"
-            aria-label="Play timeline"
-          >
-            <Play size={11} fill="currentColor" />
-          </button>
-          <span className="font-mono text-[11px] text-zinc-500">
-            0:00 / {formatTime(duration)}
-          </span>
-        </div>
-        <div className="flex items-center gap-1 text-[10px] text-zinc-600">
-          <Gauge size={13} /> 30 fps
-        </div>
-      </div>
-      <div className="relative h-[126px] overflow-hidden px-4 pt-7">
-        <div className="absolute left-4 right-4 top-3 flex justify-between font-mono text-[9px] text-zinc-700">
-          <span>0:00</span>
-          <span>{formatTime(duration / 2)}</span>
-          <span>{formatTime(duration)}</span>
-        </div>
-        <div className="flex h-16 min-w-full items-center gap-px overflow-hidden rounded-lg bg-[#17171b] px-2">
-          {project?.words.length ? (
-            project.words.slice(0, 80).map((word, index) => (
-              <div
-                key={`${word.start}-${index}`}
-                className="group relative h-9 min-w-4 flex-1 rounded-sm bg-lime-300/15 hover:bg-lime-300/30"
-              >
-                <span className="absolute -top-5 left-0 hidden whitespace-nowrap text-[9px] text-zinc-400 group-hover:block">
-                  {word.text}
-                </span>
-                <span
-                  className="absolute bottom-0 left-1/2 w-px -translate-x-1/2 rounded-full bg-lime-300/60"
-                  style={{ height: `${25 + ((index * 37) % 70)}%` }}
-                />
-              </div>
-            ))
-          ) : (
-            <div className="flex w-full items-center justify-center text-xs text-zinc-700">
-              Transcript appears here
-            </div>
-          )}
-        </div>
-        <div className="absolute bottom-0 left-[18%] top-0 w-px bg-lime-300/70">
-          <span className="absolute -left-1 top-0 size-2 rotate-45 bg-lime-300" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StyleControls({
-  style,
-  onChange,
-}: {
-  style: CaptionStyle;
-  onChange: (style: CaptionStyle) => void;
-}) {
-  return (
-    <div className="border-t border-white/[0.07] p-5">
-      <div className="mb-5 flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-          Fine tune
-        </h3>
-        <ChevronDown size={14} className="text-zinc-600" />
-      </div>
-      <label className="mb-5 block">
-        <span className="mb-2 flex justify-between text-xs text-zinc-400">
-          <span>Size</span>
-          <span className="font-mono text-zinc-600">{style.fontSize}px</span>
-        </span>
-        <input
-          className="w-full accent-lime-300"
-          type="range"
-          min="36"
-          max="110"
-          value={style.fontSize}
-          onChange={(event) =>
-            onChange({ ...style, fontSize: Number(event.target.value) })
-          }
-        />
-      </label>
-      <label className="mb-5 block">
-        <span className="mb-2 flex justify-between text-xs text-zinc-400">
-          <span>Vertical position</span>
-          <span className="font-mono text-zinc-600">{style.positionY}%</span>
-        </span>
-        <input
-          className="w-full accent-lime-300"
-          type="range"
-          min="20"
-          max="88"
-          value={style.positionY}
-          onChange={(event) =>
-            onChange({ ...style, positionY: Number(event.target.value) })
-          }
-        />
-      </label>
-      <div className="grid grid-cols-2 gap-3">
-        <ColorField
-          label="Text color"
-          value={style.textColor}
-          onChange={(value) => onChange({ ...style, textColor: value })}
-        />
-        <ColorField
-          label="Highlight"
-          value={style.activeColor}
-          onChange={(value) => onChange({ ...style, activeColor: value })}
-        />
-      </div>
-    </div>
-  );
-}
-
-function ColorField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="text-xs text-zinc-500">
-      {label}
-      <div className="mt-2 flex h-9 items-center gap-2 rounded-lg border border-white/10 px-2">
-        <input
-          type="color"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          className="size-5 border-0 bg-transparent"
-        />
-        <span className="font-mono text-[10px]">{value}</span>
-      </div>
-    </label>
   );
 }

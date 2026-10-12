@@ -1,15 +1,35 @@
 import { randomUUID } from "node:crypto";
 import { serve } from "@hono/node-server";
-import { DEFAULT_CAPTION_STYLE } from "@caption-generator/captions";
+import {
+  CAPTION_ALIGNMENTS,
+  CAPTION_ANIMATIONS,
+  CAPTION_LIMITS,
+  CAPTION_SHADOWS,
+  CAPTION_TEMPLATE_IDS,
+  DEFAULT_CAPTION_STYLE,
+  MAX_FONT_FAMILY_LENGTH,
+  WORD_LIMITS,
+  normalizeCaptionStyle,
+  sameCaptionStyle,
+  sanitizeWords,
+  wordsToText,
+} from "@caption-generator/captions";
 import { env } from "@caption-generator/env/server";
-import type { CaptionStyle } from "@caption-generator/types";
+import type { CaptionWord } from "@caption-generator/types";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { z } from "zod";
+import type { CaptionProjectRecord, ProjectPatch } from "./project-store";
 import { openProjectStore } from "./project-store";
-import { serializeProject } from "./project";
-import { putObject, readStoredObject } from "./storage";
+import { serializeProject, transcriptWords } from "./project";
+import {
+  attachmentDisposition,
+  getObjectBuffer,
+  putObject,
+  readStoredObject,
+} from "./storage";
 import { startCaptionWorker } from "./worker";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -37,6 +57,17 @@ app.use(
   }),
 );
 
+// The JSON routes of a project. The largest allowed transcript is under 1 MB;
+// the upload route is not matched and keeps its own, larger limit.
+app.use(
+  "/api/projects/:id/*",
+  bodyLimit({
+    maxSize: 4 * 1024 * 1024,
+    onError: (context) =>
+      context.json({ error: "The request is too large." }, 413),
+  }),
+);
+
 app.get("/health", (context) =>
   context.json({ ok: true, runtime: env.CAPTIONLAB_RUNTIME }),
 );
@@ -60,10 +91,8 @@ app.get("/api/media", async (context) => {
     "Content-Type": file.contentType,
   };
   const downloadName = context.req.query("download");
-  if (downloadName) {
-    headers["Content-Disposition"] =
-      `attachment; filename="${downloadName.replaceAll('"', "")}"`;
-  }
+  if (downloadName)
+    headers["Content-Disposition"] = attachmentDisposition(downloadName);
 
   const total = file.body.length;
   const range = context.req.header("range");
@@ -139,25 +168,90 @@ app.get("/api/projects/:id", async (context) => {
   return context.json(await serializeProject(project));
 });
 
+const hexColor = z.string().regex(/^#[0-9a-f]{6}$/i);
+const within = (limits: { min: number; max: number }) =>
+  z.number().min(limits.min).max(limits.max);
+
+// The fields added in version 2 are optional so a style saved by an older
+// editor is still accepted; normalizeCaptionStyle fills them in.
 const styleSchema = z.object({
-  templateId: z.enum(["viral", "clean", "neon", "boxed", "karaoke"]),
-  fontFamily: z.string().min(1).max(120),
-  fontSize: z.number().min(28).max(140),
-  fontWeight: z.number().min(300).max(950),
-  textColor: z.string().regex(/^#[0-9a-f]{6}$/i),
-  activeColor: z.string().regex(/^#[0-9a-f]{6}$/i),
-  strokeColor: z.string().max(32),
-  strokeWidth: z.number().min(0).max(16),
-  backgroundColor: z.string().regex(/^#[0-9a-f]{6}$/i),
-  backgroundOpacity: z.number().min(0).max(1),
-  borderRadius: z.number().min(0).max(80),
-  maxWords: z.number().int().min(1).max(10),
+  version: z.literal(2).optional(),
+  templateId: z.enum(CAPTION_TEMPLATE_IDS),
+  fontFamily: z.string().trim().min(1).max(MAX_FONT_FAMILY_LENGTH),
+  fontSize: within(CAPTION_LIMITS.fontSize),
+  fontWeight: within(CAPTION_LIMITS.fontWeight),
+  italic: z.boolean().optional(),
   uppercase: z.boolean(),
-  positionY: z.number().min(5).max(90),
+  letterSpacing: within(CAPTION_LIMITS.letterSpacing).optional(),
+  textColor: hexColor,
+  activeColor: hexColor,
+  activeBackgroundColor: hexColor.optional(),
+  activeBackgroundOpacity: within(
+    CAPTION_LIMITS.activeBackgroundOpacity,
+  ).optional(),
+  inactiveOpacity: within(CAPTION_LIMITS.inactiveOpacity).optional(),
+  strokeColor: z.string().max(32),
+  strokeWidth: within(CAPTION_LIMITS.strokeWidth),
+  backgroundColor: hexColor,
+  backgroundOpacity: within(CAPTION_LIMITS.backgroundOpacity),
+  borderRadius: within(CAPTION_LIMITS.borderRadius),
+  shadow: z.enum(CAPTION_SHADOWS).optional(),
+  animation: z.enum(CAPTION_ANIMATIONS).optional(),
+  maxWords: within(CAPTION_LIMITS.maxWords).int(),
+  positionX: within(CAPTION_LIMITS.positionX).optional(),
+  // Version 1 styles used a different scale that reaches a little higher.
+  positionY: z.number().min(CAPTION_LIMITS.positionY.min).max(100),
+  maxWidth: within(CAPTION_LIMITS.maxWidth).optional(),
+  textAlign: z.enum(CAPTION_ALIGNMENTS).optional(),
+  opacity: within(CAPTION_LIMITS.opacity).optional(),
+  rotation: within(CAPTION_LIMITS.rotation).optional(),
 });
 
+const VERSION_2_FIELDS = [
+  "italic",
+  "letterSpacing",
+  "activeBackgroundColor",
+  "activeBackgroundOpacity",
+  "inactiveOpacity",
+  "shadow",
+  "animation",
+  "positionX",
+  "maxWidth",
+  "textAlign",
+  "opacity",
+  "rotation",
+] as const satisfies ReadonlyArray<keyof z.infer<typeof styleSchema>>;
+
+const wordsSchema = z.object({
+  words: z
+    .array(
+      z.object({
+        text: z.string().max(WORD_LIMITS.textLength * 4),
+        start: z.number().finite(),
+        end: z.number().finite(),
+      }),
+    )
+    .max(WORD_LIMITS.count),
+});
+
+const readJson = async (request: { json: () => Promise<unknown> }) => {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
+};
+
+// Once the captions change, a finished or failed export no longer matches.
+const afterCaptionEdit = (project: CaptionProjectRecord): ProjectPatch =>
+  project.status === "COMPLETE" || project.status === "FAILED"
+    ? { status: "READY", error: null, exportKey: null, renderProgress: 0 }
+    : {};
+
+const EXPORTING_MESSAGE = "Wait for the export to finish before editing.";
+
 app.patch("/api/projects/:id/style", async (context) => {
-  const parsed = styleSchema.safeParse(await context.req.json());
+  const parsed = styleSchema.safeParse(await readJson(context.req));
   if (!parsed.success)
     return context.json(
       { error: "Invalid caption style.", details: parsed.error.flatten() },
@@ -165,10 +259,100 @@ app.patch("/api/projects/:id/style", async (context) => {
     );
   const existing = await store.findById(context.req.param("id"));
   if (!existing) return context.json({ error: "Project not found." }, 404);
+  if (existing.status === "EXPORTING")
+    return context.json({ error: EXPORTING_MESSAGE }, 409);
+  // A body that carries version 2 fields is version 2 even without saying so;
+  // reading it as version 1 would rescale its position on every save.
+  const captionStyle = normalizeCaptionStyle(
+    VERSION_2_FIELDS.some((field) => parsed.data[field] !== undefined)
+      ? { ...parsed.data, version: 2 }
+      : parsed.data,
+  );
+  if (
+    sameCaptionStyle(captionStyle, normalizeCaptionStyle(existing.captionStyle))
+  )
+    return context.json(await serializeProject(existing));
+  // A failed transcription stays failed; there is nothing to export yet.
   const project = await store.update(existing.id, {
-    captionStyle: parsed.data satisfies CaptionStyle,
+    captionStyle,
+    ...(existing.transcript ? afterCaptionEdit(existing) : {}),
   });
   return context.json(await serializeProject(project));
+});
+
+const saveWords = async (
+  project: CaptionProjectRecord,
+  words: CaptionWord[],
+) => {
+  // Saving what is already there must not discard a finished export.
+  const current = transcriptWords(project.transcript, project.durationSeconds);
+  if (
+    current.length === words.length &&
+    current.every((word, index) => {
+      const next = words[index];
+      return (
+        next !== undefined &&
+        word.text === next.text &&
+        word.start === next.start &&
+        word.end === next.end
+      );
+    })
+  )
+    return project;
+  const transcript = (project.transcript ?? {}) as Record<string, unknown>;
+  return store.update(project.id, {
+    transcript: { ...transcript, text: wordsToText(words), words },
+    ...afterCaptionEdit(project),
+  });
+};
+
+app.patch("/api/projects/:id/words", async (context) => {
+  const parsed = wordsSchema.safeParse(await readJson(context.req));
+  if (!parsed.success)
+    return context.json(
+      { error: "Invalid caption words.", details: parsed.error.flatten() },
+      400,
+    );
+  const existing = await store.findById(context.req.param("id"));
+  if (!existing) return context.json({ error: "Project not found." }, 404);
+  if (existing.status === "EXPORTING")
+    return context.json({ error: EXPORTING_MESSAGE }, 409);
+  if (!existing.transcript || !existing.durationSeconds)
+    return context.json(
+      { error: "Wait for transcription to finish before editing." },
+      409,
+    );
+  const words = sanitizeWords(parsed.data.words, existing.durationSeconds);
+  if (words.length === 0)
+    return context.json({ error: "Keep at least one word." }, 400);
+  return context.json(await serializeProject(await saveWords(existing, words)));
+});
+
+app.post("/api/projects/:id/words/reset", async (context) => {
+  const existing = await store.findById(context.req.param("id"));
+  if (!existing) return context.json({ error: "Project not found." }, 404);
+  if (existing.status === "EXPORTING")
+    return context.json({ error: EXPORTING_MESSAGE }, 409);
+  if (!existing.transcriptKey || !existing.durationSeconds)
+    return context.json(
+      { error: "The original transcript is not available." },
+      409,
+    );
+  let original: unknown;
+  try {
+    original = JSON.parse(
+      (await getObjectBuffer(existing.transcriptKey)).toString("utf8"),
+    );
+  } catch {
+    return context.json(
+      { error: "The original transcript could not be read." },
+      500,
+    );
+  }
+  const words = transcriptWords(original, existing.durationSeconds);
+  if (words.length === 0)
+    return context.json({ error: "The original transcript is empty." }, 409);
+  return context.json(await serializeProject(await saveWords(existing, words)));
 });
 
 app.post("/api/projects/:id/export", async (context) => {
@@ -181,6 +365,8 @@ app.post("/api/projects/:id/export", async (context) => {
       409,
     );
   }
+  if (project.status === "EXPORTING")
+    return context.json(await serializeProject(project), 202);
   const updated = await store.update(id, {
     status: "EXPORTING",
     renderProgress: 0,
