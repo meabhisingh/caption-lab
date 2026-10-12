@@ -1,4 +1,11 @@
-import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -29,6 +36,29 @@ const run = (command, args, options = {}) => {
 const runPnpm = (args, options = {}) =>
   run(process.execPath, [pnpmCli, ...args], options);
 
+// `pnpm deploy` records its own prod-only, hoisted settings as the workspace's
+// install state, so the next `pnpm run` would try to reinstall the whole repo.
+const workspaceState = resolve(
+  repositoryRoot,
+  "node_modules/.pnpm-workspace-state-v1.json",
+);
+const deploy = async (project, target) => {
+  const saved = await readFile(workspaceState).catch(() => null);
+  try {
+    runPnpm([
+      "--config.node-linker=hoisted",
+      "--filter",
+      project,
+      "deploy",
+      "--prod",
+      target,
+      "--legacy",
+    ]);
+  } finally {
+    if (saved) await writeFile(workspaceState, saved);
+  }
+};
+
 const findBrowserExecutable = async (directory) => {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
@@ -52,15 +82,7 @@ runPnpm(["--filter", "web", "build"], {
   },
 });
 
-runPnpm([
-  "--config.node-linker=hoisted",
-  "--filter",
-  "web",
-  "deploy",
-  "--prod",
-  webStage,
-  "--legacy",
-]);
+await deploy("web", webStage);
 
 const standaloneWeb = resolve(
   repositoryRoot,
@@ -83,15 +105,7 @@ await cp(
   { recursive: true },
 );
 
-runPnpm([
-  "--config.node-linker=hoisted",
-  "--filter",
-  "server",
-  "deploy",
-  "--prod",
-  backendStage,
-  "--legacy",
-]);
+await deploy("server", backendStage);
 
 const remotionCli = resolve(
   backendStage,
@@ -120,6 +134,10 @@ await writeFile(
     2,
   )}\n`,
 );
+
+// Staging wipes the tracked placeholders that keep the resource globs valid.
+await writeFile(resolve(webStage, ".gitkeep"), "");
+await writeFile(resolve(backendStage, ".gitkeep"), "");
 
 console.log(
   `Desktop resources staged in ${basename(stageDirectory)} for ${process.platform}-${process.arch}`,
